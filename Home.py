@@ -5,51 +5,60 @@ import matplotlib.pyplot as plt
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense
+from datetime import datetime
+import locale
+
+# Set locale untuk parsing bulan dalam Bahasa Indonesia
+locale.setlocale(locale.LC_TIME, 'id_ID.UTF-8')
 
 # Konfigurasi Streamlit
 st.set_page_config(page_title="Prediksi Inflasi BI", layout="wide")
 st.title("📊 Prediksi Inflasi Indonesia (2003-2024) dengan LSTM")
-st.markdown("""
-Aplikasi ini menggunakan model **LSTM** untuk memprediksi inflasi bulanan berdasarkan data resmi Bank Indonesia.
-""")
 
-# 1. Load Data (Sesuai struktur Excel: Periode & Inflasi)
+# 1. Load dan Preprocessing Data
 @st.cache_data
 def load_data():
     try:
         # Baca file Excel
-        data = pd.read_excel(
-            "data_inflasi_bi_2003_2024.xlsx",
-            parse_dates=['Periode'],  # Gunakan kolom 'Periode' sebagai tanggal
-            usecols=['Periode', 'Inflasi'],  # Hanya baca kolom yang diperlukan
-            engine='openpyxl'
-        )
+        df = pd.read_excel("data_inflasi_bi_2003_2024.xlsx", sheet_name="Data Inflasi", header=4, usecols=["Periode", "Data Inflasi"])
         
-        # Rename kolom untuk konsistensi
-        data = data.rename(columns={
-            'Periode': 'Tanggal',
-            'Inflasi': 'Inflasi_MoM'
-        })
+        # Cleaning data
+        df = df.rename(columns={"Data Inflasi": "Inflasi"})
+        df = df.dropna()
         
-        data.set_index('Tanggal', inplace=True)
-        return data
+        # Konversi nilai inflasi ke float
+        df['Inflasi'] = df['Inflasi'].str.replace(' %', '').str.replace(',', '.').astype(float)
+        
+        # Fungsi untuk konversi periode ke datetime
+        def convert_periode(periode):
+            try:
+                bulan_tahun = periode.split()
+                bulan = bulan_tahun[0].capitalize()
+                tahun = bulan_tahun[1] if len(bulan_tahun) > 1 else "2024"
+                return datetime.strptime(f"{bulan} {tahun}", "%B %Y")
+            except:
+                return pd.NaT
+        
+        df['Tanggal'] = df['Periode'].apply(convert_periode)
+        df = df.dropna().sort_values('Tanggal').set_index('Tanggal')
+        return df[['Inflasi']]
     
     except Exception as e:
-        st.error(f"Gagal memuat data: {e}\nPastikan file Excel memiliki kolom 'Periode' dan 'Inflasi'.")
+        st.error(f"Gagal memuat data: {str(e)}")
         return None
 
 data = load_data()
 if data is None:
-    st.stop()  # Hentikan aplikasi jika data tidak valid
+    st.stop()
 
 # Tampilkan data
-st.subheader("Data Historis Inflasi BI (2003-2024)")
+st.subheader("Data Inflasi BI (2003-2024)")
 st.dataframe(data.head())
 
 # 2. Visualisasi Data
-st.subheader("Trend Inflasi Bulanan (MoM)")
+st.subheader("Trend Inflasi Bulanan")
 fig, ax = plt.subplots(figsize=(12, 4))
-ax.plot(data.index, data['Inflasi_MoM'], label='Inflasi MoM', color='blue', linewidth=1)
+ax.plot(data.index, data['Inflasi'], label='Inflasi (%)', color='blue')
 ax.set_xlabel("Tahun")
 ax.set_ylabel("Inflasi (%)")
 ax.grid(True)
@@ -57,7 +66,7 @@ st.pyplot(fig)
 
 # 3. Preprocessing Data
 scaler = MinMaxScaler()
-data_scaled = scaler.fit_transform(data[['Inflasi_MoM']])
+data_scaled = scaler.fit_transform(data[['Inflasi']])
 
 # Fungsi untuk membuat dataset LSTM
 def create_dataset(data, window_size=12):
@@ -67,7 +76,7 @@ def create_dataset(data, window_size=12):
         y.append(data[i+window_size])
     return np.array(X), np.array(y)
 
-window_size = st.sidebar.slider("**Pilih Window Size:**", 6, 24, 12)
+window_size = st.sidebar.slider("Pilih Window Size:", 6, 24, 12)
 X, y = create_dataset(data_scaled, window_size)
 
 # Bagi data (80% training, 20% testing)
@@ -76,20 +85,19 @@ X_train, X_test = X[:train_size], X[train_size:]
 y_train, y_test = y[:train_size], y[train_size:]
 
 # 4. Bangun Model LSTM
-model = Sequential([
-    LSTM(50, return_sequences=True, input_shape=(window_size, 1)),
-    LSTM(50),
-    Dense(1)
-])
+model = Sequential()
+model.add(LSTM(64, return_sequences=True, input_shape=(window_size, 1)))
+model.add(LSTM(32))
+model.add(Dense(1))
 model.compile(optimizer='adam', loss='mse')
 
 # Training model
 if st.sidebar.button("🚀 Train Model"):
     with st.spinner("Training model LSTM..."):
         history = model.fit(
-            X_train, y_train, 
-            epochs=100, 
-            batch_size=32, 
+            X_train, y_train,
+            epochs=150,
+            batch_size=32,
             validation_data=(X_test, y_test),
             verbose=0
         )
@@ -133,12 +141,13 @@ if st.sidebar.button("🌐 Generate Prediksi"):
     
     future_preds = scaler.inverse_transform(np.array(future_preds).reshape(-1, 1))
     future_dates = pd.date_range(
-        start=data.index[-1] + pd.DateOffset(months=1), 
-        periods=n_future, 
+        start=data.index[-1] + pd.DateOffset(months=1),
+        periods=n_future,
         freq='MS'
     )
     
     fig_future = plt.figure(figsize=(12, 4))
+    plt.plot(data.index[-12:], data['Inflasi'][-12:], label='Data Historis', color='blue')
     plt.plot(future_dates, future_preds, label='Prediksi', color='green', marker='o')
     plt.legend()
     st.pyplot(fig_future)
