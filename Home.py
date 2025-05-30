@@ -13,20 +13,34 @@ st.markdown("""
 Aplikasi ini menggunakan model **LSTM** untuk memprediksi inflasi bulanan berdasarkan data resmi Bank Indonesia.
 """)
 
-# 1. Load Data
+# 1. Load Data (Sesuai struktur Excel: Periode & Inflasi)
 @st.cache_data
 def load_data():
-    # Ganti dengan path file data BI yang sudah diunduh
-    data = pd.read_excel("data_inflasi_bi_2003_2024.xlsx", parse_dates=['Tanggal'])
-    data.set_index('Tanggal', inplace=True)
-    return data
+    try:
+        # Baca file Excel
+        data = pd.read_excel(
+            "data_inflasi_bi_2003_2024.xlsx",
+            parse_dates=['Periode'],  # Gunakan kolom 'Periode' sebagai tanggal
+            usecols=['Periode', 'Inflasi'],  # Hanya baca kolom yang diperlukan
+            engine='openpyxl'
+        )
+        
+        # Rename kolom untuk konsistensi
+        data = data.rename(columns={
+            'Periode': 'Tanggal',
+            'Inflasi': 'Inflasi_MoM'
+        })
+        
+        data.set_index('Tanggal', inplace=True)
+        return data
+    
+    except Exception as e:
+        st.error(f"Gagal memuat data: {e}\nPastikan file Excel memiliki kolom 'Periode' dan 'Inflasi'.")
+        return None
 
-try:
-    data = load_data()
-    st.success("Data berhasil dimuat!")
-except Exception as e:
-    st.error(f"Gagal memuat data: {e}")
-    st.stop()
+data = load_data()
+if data is None:
+    st.stop()  # Hentikan aplikasi jika data tidak valid
 
 # Tampilkan data
 st.subheader("Data Historis Inflasi BI (2003-2024)")
